@@ -318,8 +318,39 @@ async fn read_response(
 fn handle_error(status: QuicErrorStatus) -> QuicClientError {
     match status {
         x if x == QuicServiceError::SlowDown as u32 => QuicClientError::SlowDown,
+        x if x == QuicServiceError::NotAuthorized as u32 => QuicClientError::NotAuthorized,
         x if x == QuicServiceError::NotFound as u32 => QuicClientError::NotFound,
         x if x == QuicServiceError::Oversized as u32 => QuicClientError::Oversized,
         _ => QuicClientError::ServerError(status),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_known_service_errors_to_typed_variants() {
+        assert!(matches!(
+            handle_error(QuicServiceError::NotAuthorized as u32),
+            QuicClientError::NotAuthorized
+        ));
+        assert!(matches!(
+            handle_error(QuicServiceError::SlowDown as u32),
+            QuicClientError::SlowDown
+        ));
+        assert!(matches!(
+            handle_error(QuicServiceError::NotFound as u32),
+            QuicClientError::NotFound
+        ));
+        assert!(matches!(
+            handle_error(QuicServiceError::Oversized as u32),
+            QuicClientError::Oversized
+        ));
+    }
+
+    #[test]
+    fn unknown_status_falls_back_to_server_error() {
+        assert!(matches!(handle_error(42), QuicClientError::ServerError(42)));
     }
 }

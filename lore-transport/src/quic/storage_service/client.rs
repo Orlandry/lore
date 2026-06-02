@@ -11,6 +11,7 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use lore_base::error::Disconnected;
+use lore_base::error::NotAuthorized;
 use lore_base::error::NotFound;
 use lore_base::error::Oversized;
 use lore_base::error::SlowDown;
@@ -230,6 +231,7 @@ impl ServiceClient for StorageClient {
             }
             SendWithReconnectError::ClientError(client_error) => match client_error {
                 QuicClientError::SlowDown => ProtocolError::from(SlowDown),
+                QuicClientError::NotAuthorized => ProtocolError::from(NotAuthorized),
                 QuicClientError::NotFound => ProtocolError::from(NotFound),
                 QuicClientError::Oversized => ProtocolError::from(Oversized {
                     context: format!(

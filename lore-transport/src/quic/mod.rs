@@ -75,6 +75,8 @@ pub enum QuicClientError {
     Permit,
     #[error("Slow down")]
     SlowDown,
+    #[error("Not authorized")]
+    NotAuthorized,
     #[error("Not found")]
     NotFound,
     #[error("Oversized fragment rejected by server")]

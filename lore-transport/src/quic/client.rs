@@ -466,6 +466,7 @@ where
                 if matches!(
                     err,
                     QuicClientError::SlowDown
+                        | QuicClientError::NotAuthorized
                         | QuicClientError::NotFound
                         | QuicClientError::ClientMessageTooBig
                 ) =>
