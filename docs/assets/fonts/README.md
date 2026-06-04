@@ -4,9 +4,9 @@ The font binaries in this directory are licensed under the
 SIL Open Font License, Version 1.1 (OFL-1.1):
 
 - **Inter** — Copyright © 2020 The Inter Project Authors
-  (https://github.com/rsms/inter).
+  (<https://github.com/rsms/inter>).
 - **Recursive Mono** — Copyright 2019 The Recursive Project
-  Authors (https://github.com/arrowtype/recursive).
+  Authors (<https://github.com/arrowtype/recursive>).
 
 The full OFL-1.1 text and per-font metadata live in the
 canonical license records:

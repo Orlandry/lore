@@ -7,7 +7,7 @@ consulted: list everyone whose opinions are sought (typically subject-matter exp
 informed: list everyone who is kept up-to-date on progress; and with whom there is a one-way communication
 ---
 
-# {short title of solved problem and solution}
+# ADR-NNNNN: {short title of solved problem and solution}
 
 ## Context and Problem Statement
 

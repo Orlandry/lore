@@ -35,11 +35,18 @@ exclude_docs: |
   developing/decisions/adr-template.md
   # Bundled-font licensing notice — kept in-repo, excluded from the built site.
   assets/**/*.md
+  # mkdocs hook source lives under assets/ but is config, not a published page.
+  assets/hooks/
 
 plugins:
   - search
   - awesome-pages
   - section-index
+
+# Site-layer presentation for ADRs: render the frontmatter (status, date,
+# deciders, …) as a table under each H1. Source ADR files are left untouched.
+hooks:
+  - docs/assets/hooks/adr_meta.py
 
 markdown_extensions:
   - gfm_admonition
@@ -50,7 +57,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite

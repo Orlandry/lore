@@ -382,7 +382,7 @@ Optional fields (omit when not relevant):
 
 ### Required structure
 
-1. H1 page title — a short statement of the problem and the chosen solution. ADR titles aren't prefixed with `ADR-NNNNN:`; the sequence number lives in the filename.
+1. H1 page title — a short statement of the problem and the chosen solution, prefixed with `ADR-NNNNN:` to match the sequence number in the filename (for example, `# ADR-00012: Log dispatch in core library`).
 2. **Context and Problem Statement** — what circumstance, constraint, or problem motivated the decision. Free form, two to three sentences, or an illustrative story. Link out to collaboration boards or issue trackers when useful.
 3. **Decision Drivers** — bulleted list of forces, constraints, or concerns that shape the decision.
 4. **Considered Options** — bulleted list of the option titles weighed before the decision.
