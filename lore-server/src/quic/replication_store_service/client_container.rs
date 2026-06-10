@@ -192,7 +192,13 @@ where
             };
 
             let mut client_write = self.client.write().await;
-            *client_write = new_client;
+            // The concrete QUIC client has some drop logic that blocks the current task on an
+            // async function - draining connections and other slow operations.
+            // We don't want this delay to hold back releasing the write lock,
+            // so avoid dropping the old client until after we have dropped the write lock
+            let _old_client = std::mem::replace(&mut *client_write, new_client);
+            drop(client_write);
+
             self.client_epoch.fetch_add(1, Ordering::Relaxed);
             self.is_client_healthy.store(true, Ordering::Relaxed);
 
