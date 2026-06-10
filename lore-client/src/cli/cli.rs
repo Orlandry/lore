@@ -98,6 +98,10 @@ pub struct LoreCli {
     #[clap(global = true, long, value_name = "count")]
     pub compress_limit: Option<usize>,
 
+    /// Set maximum total number of threads Lore sizes its pools for
+    #[clap(global = true, hide = true, long, value_name = "count")]
+    pub max_threads: Option<usize>,
+
     #[arg(long, hide = true)]
     pub markdown_help: bool,
 

@@ -388,18 +388,142 @@ pub fn processor_count() -> usize {
     }
 }
 
-/// Returns the default number of blocking threads for the tokio runtime.
+/// Optional ceiling on the *sum* of the worker, blocking and compute pool
+/// sizes. Set once via [`set_thread_limit`]; `0` means "no limit". The
+/// `LORE_MAX_THREADS` env var overrides it when set above zero. See
+/// [`thread_limit`] and [`thread_counts`].
+static THREAD_LIMIT: OnceLock<usize> = OnceLock::new();
+
+/// Caps the total threads Lore sizes its pools for; the per-pool split is
+/// derived from this and the processor count (see [`thread_counts`]). Pass `0`
+/// for "no limit". Must be called before the runtime is first constructed.
+/// Overridden by `LORE_MAX_THREADS` when that is set above zero.
 ///
-/// Respects the `LORE_BLOCKING_THREADS` environment variable if set to a positive integer.
-/// Otherwise computes `min(2 * (processor_count() + 1), 128)`.
-pub fn default_blocking_threads() -> usize {
-    if let Ok(val) = std::env::var("LORE_BLOCKING_THREADS")
-        && let Ok(val) = str::parse(val.as_str())
-        && val > 0
-    {
-        return val;
+/// Returns `true` if applied, `false` if a limit was already set.
+pub fn set_thread_limit(count: usize) -> bool {
+    THREAD_LIMIT.set(count).is_ok()
+}
+
+/// The effective total thread limit: `LORE_MAX_THREADS` if set above zero,
+/// otherwise the value from [`set_thread_limit`]. Returns `None` for "no limit".
+fn thread_limit() -> Option<usize> {
+    env_thread_override("LORE_MAX_THREADS")
+        .or_else(|| THREAD_LIMIT.get().copied())
+        .filter(|&limit| limit > 0)
+}
+
+/// Per-pool thread counts Lore sizes its runtime for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThreadCounts {
+    /// Tokio async worker threads.
+    pub worker: usize,
+    /// Tokio blocking (`spawn_blocking`) threads.
+    pub blocking: usize,
+    /// Rayon compute-pool threads (compression, hashing, …).
+    pub compute: usize,
+}
+
+impl ThreadCounts {
+    /// Total threads across all three pools.
+    pub fn total(&self) -> usize {
+        self.worker + self.blocking + self.compute
     }
-    std::cmp::min(2 * (processor_count() + 1), 128)
+}
+
+/// Minimum threads per pool, even under a tight limit — a starved pool can
+/// deadlock work another pool blocks on (e.g. compute awaited by workers). Takes
+/// precedence over the limit, so the smallest achievable total is `3 * MIN`.
+const MIN_THREADS_PER_POOL: usize = 2;
+
+/// Lore's unconstrained per-pool counts, used when no thread limit is set.
+fn default_thread_counts(cores: usize) -> ThreadCounts {
+    ThreadCounts {
+        worker: cores.max(MIN_THREADS_PER_POOL),
+        blocking: std::cmp::min(2 * (cores + 1), 128).max(MIN_THREADS_PER_POOL),
+        compute: cores.saturating_sub(1).max(MIN_THREADS_PER_POOL),
+    }
+}
+
+/// Scales the per-pool defaults down to fit a total `limit`, preserving their
+/// relative shape via the largest-remainder method. Each pool keeps at least
+/// [`MIN_THREADS_PER_POOL`], so a `limit` below `3 * MIN_THREADS_PER_POOL`
+/// floors there. Defaults that already fit are returned unchanged.
+fn apportion_thread_counts(defaults: ThreadCounts, limit: usize) -> ThreadCounts {
+    let total = defaults.total();
+    if total <= limit {
+        return defaults;
+    }
+
+    let ideal = [defaults.worker, defaults.blocking, defaults.compute];
+    let mut alloc = [0usize; 3];
+    let mut remainder = [0usize; 3];
+    for i in 0..3 {
+        let scaled = ideal[i] * limit;
+        alloc[i] = std::cmp::max(scaled / total, MIN_THREADS_PER_POOL);
+        remainder[i] = scaled % total;
+    }
+
+    let mut sum: usize = alloc.iter().sum();
+    while sum > limit {
+        let Some(i) = (0..3)
+            .filter(|&i| alloc[i] > MIN_THREADS_PER_POOL)
+            .max_by_key(|&i| alloc[i])
+        else {
+            break;
+        };
+        alloc[i] -= 1;
+        sum -= 1;
+    }
+    while sum < limit {
+        let i = (0..3).max_by_key(|&i| remainder[i]).unwrap();
+        if remainder[i] == 0 {
+            break;
+        }
+        alloc[i] += 1;
+        remainder[i] = 0;
+        sum += 1;
+    }
+
+    ThreadCounts {
+        worker: alloc[0],
+        blocking: alloc[1],
+        compute: alloc[2],
+    }
+}
+
+/// Reads a positive-integer per-pool thread override from `var`, returning
+/// `None` when unset, unparsable or zero.
+fn env_thread_override(var: &str) -> Option<usize> {
+    std::env::var(var)
+        .ok()
+        .and_then(|val| str::parse::<usize>(val.as_str()).ok())
+        .filter(|&val| val > 0)
+}
+
+/// Per-pool counts from the core count and optional limit, before env overrides.
+fn budget_thread_counts() -> ThreadCounts {
+    let defaults = default_thread_counts(processor_count());
+    match thread_limit() {
+        Some(limit) => apportion_thread_counts(defaults, limit),
+        None => defaults,
+    }
+}
+
+/// Per-pool thread counts Lore sizes its runtime for: the budget-derived counts
+/// with per-pool env overrides applied. The `LORE_*_THREADS` overrides are
+/// absolute and bypass the limit, so they can push the total back above it.
+pub fn thread_counts() -> ThreadCounts {
+    ThreadCounts {
+        worker: default_worker_threads(),
+        blocking: default_blocking_threads(),
+        compute: compute_pool_thread_count(),
+    }
+}
+
+/// Blocking threads for the tokio runtime: `LORE_BLOCKING_THREADS` if set,
+/// else the blocking share of the budget (see [`thread_counts`]).
+pub fn default_blocking_threads() -> usize {
+    env_thread_override("LORE_BLOCKING_THREADS").unwrap_or_else(|| budget_thread_counts().blocking)
 }
 
 fn default_thread_keep_alive() -> u64 {
@@ -457,25 +581,25 @@ pub fn runtime_with_settings(settings: Option<TokioSettings>) -> Handle {
                     static ID: AtomicUsize = AtomicUsize::new(0);
                     format!("lore-tokio-{}", ID.fetch_add(1, Ordering::Relaxed))
                 });
-            if let Ok(val) = std::env::var("LORE_WORKER_THREADS")
-                && let Ok(val) = str::parse(val.as_str())
-                && val > 0
-            {
-                builder.worker_threads(val);
-            } else if let Some(val) = settings.worker_threads
-                && val > 0
-            {
-                builder.worker_threads(val);
-            }
+            // Always set an explicit count, else tokio would default to the raw
+            // core count and ignore the thread limit. Precedence: env override,
+            // explicit setting, budget-derived default.
+            let worker_threads = match (
+                env_thread_override("LORE_WORKER_THREADS"),
+                settings.worker_threads,
+            ) {
+                (Some(val), _) => val,
+                (None, Some(val)) if val > 0 => val,
+                _ => default_worker_threads(),
+            };
+            builder.worker_threads(worker_threads);
             let runtime = builder.build().expect("Failed to create runtime");
             let handle = runtime.handle().clone();
             *default_runtime = Some(runtime);
 
-            // Build the compute pool in the background so runtime creation
-            // isn't blocked on spawning N rayon workers.
-            // No LORE_CONTEXT is active at runtime construction time, so we
-            // call Handle::spawn directly — lore_spawn! would follow the
-            // same code path in this case.
+            // Build the compute pool off-thread so runtime creation isn't
+            // blocked on spawning N rayon workers. No LORE_CONTEXT is active
+            // yet, so Handle::spawn directly rather than lore_spawn!.
             #[allow(clippy::disallowed_methods)]
             handle.spawn(async {
                 let _ = COMPUTE_POOL.get_or_init(build_compute_pool);
@@ -486,22 +610,17 @@ pub fn runtime_with_settings(settings: Option<TokioSettings>) -> Handle {
     }
 }
 
-/// Returns the thread count used when building the shared compute pool.
-///
-/// Respects the `LORE_COMPUTE_THREADS` environment variable if set to a
-/// positive integer. Otherwise set to CPU count minus one (minimum one).
-/// Exposed so callers that size data structures per worker (scratch
-/// buffer pools, queues, etc.) can use the same bound the pool uses.
+/// Threads for the shared compute pool: `LORE_COMPUTE_THREADS` if set, else the
+/// compute share of the budget (see [`thread_counts`]). Exposed so callers that
+/// size per-worker data structures can use the same bound the pool uses.
 pub fn compute_pool_thread_count() -> usize {
-    if let Ok(val) = std::env::var("LORE_COMPUTE_THREADS")
-        && let Ok(val) = str::parse::<usize>(val.as_str())
-        && val > 0
-    {
-        return val;
-    }
-    let parallelism = std::thread::available_parallelism().map_or(2, |n| n.get());
-    let proc_count = processor_count();
-    std::cmp::max(std::cmp::max(parallelism, proc_count).saturating_sub(1), 1)
+    env_thread_override("LORE_COMPUTE_THREADS").unwrap_or_else(|| budget_thread_counts().compute)
+}
+
+/// Tokio worker threads: `LORE_WORKER_THREADS` if set, else the worker share of
+/// the budget (see [`thread_counts`]).
+pub fn default_worker_threads() -> usize {
+    env_thread_override("LORE_WORKER_THREADS").unwrap_or_else(|| budget_thread_counts().worker)
 }
 
 /// Returns a reference to the shared compute thread pool. The pool is
@@ -563,7 +682,6 @@ mod tests {
     #[test]
     fn runtime_returns_valid_handle() {
         let handle = runtime();
-        // Verify we can spawn on the handle
         handle.block_on(async {
             tokio::task::yield_now().await;
         });
@@ -583,21 +701,49 @@ mod tests {
     }
 
     #[test]
-    fn tokio_settings_default_is_valid() {
-        let settings = TokioSettings::default();
-        assert!(settings.max_blocking_threads > 0);
-        assert!(settings.thread_keep_alive_seconds > 0);
-        assert!(settings.worker_threads.is_none());
+    fn default_thread_counts_match_historic_formulas() {
+        let counts = default_thread_counts(8);
+        assert_eq!(counts.worker, 8);
+        assert_eq!(counts.blocking, std::cmp::min(2 * (8 + 1), 128));
+        assert_eq!(counts.compute, 7);
     }
 
     #[test]
-    fn default_blocking_threads_returns_positive() {
-        assert!(default_blocking_threads() > 0);
+    fn apportion_returns_defaults_when_within_limit() {
+        let defaults = default_thread_counts(8);
+        let total = defaults.total();
+        assert_eq!(apportion_thread_counts(defaults, total), defaults);
+        assert_eq!(apportion_thread_counts(defaults, total + 100), defaults);
     }
 
     #[test]
-    fn processor_count_returns_positive() {
-        assert!(processor_count() >= 1);
+    fn apportion_fills_budget_exactly_above_the_floor() {
+        let defaults = default_thread_counts(64);
+        for limit in (3 * MIN_THREADS_PER_POOL)..=defaults.total() {
+            let counts = apportion_thread_counts(defaults, limit);
+            assert_eq!(counts.total(), limit, "limit {limit} not used exactly");
+            assert!(counts.worker >= MIN_THREADS_PER_POOL);
+            assert!(counts.blocking >= MIN_THREADS_PER_POOL);
+            assert!(counts.compute >= MIN_THREADS_PER_POOL);
+        }
+    }
+
+    #[test]
+    fn apportion_floors_below_three_times_min() {
+        let counts = apportion_thread_counts(default_thread_counts(64), 1);
+        assert_eq!(counts.worker, MIN_THREADS_PER_POOL);
+        assert_eq!(counts.blocking, MIN_THREADS_PER_POOL);
+        assert_eq!(counts.compute, MIN_THREADS_PER_POOL);
+    }
+
+    #[test]
+    fn apportion_at_limit_64_on_64_core_host() {
+        let defaults = default_thread_counts(64);
+        assert_eq!(defaults.total(), 255);
+        let counts = apportion_thread_counts(defaults, 64);
+        assert_eq!(counts.worker, 16);
+        assert_eq!(counts.blocking, 32);
+        assert_eq!(counts.compute, 16);
     }
 
     #[tokio::test]

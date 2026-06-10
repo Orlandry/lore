@@ -71,6 +71,14 @@ pub fn runtime() -> tokio::runtime::Handle {
     lore_base::runtime::runtime()
 }
 
+/// Caps the total number of threads Lore sizes its pools for. Pass `0` for "no
+/// limit". Must be called before the first Lore operation; overridden by the
+/// `LORE_MAX_THREADS` env var when that is set above zero. Returns `true` if
+/// applied, `false` if a limit was already set.
+pub fn set_thread_limit(count: usize) -> bool {
+    lore_base::runtime::set_thread_limit(count)
+}
+
 pub fn log_file_path() -> LoreString {
     log::get_logs_path().into()
 }

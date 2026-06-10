@@ -44,6 +44,10 @@ pub fn client_main() -> ExitCode {
     lore::log::initialize();
     lore::log::configure(&log_config);
 
+    if let Some(max_threads) = cli.max_threads {
+        lore::set_thread_limit(max_threads);
+    }
+
     let globals = lore_globals_from_args(&cli);
 
     let result = handle_lore_commands(cli_command, globals);

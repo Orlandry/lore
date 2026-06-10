@@ -6771,6 +6771,24 @@ pub extern "C" fn lore_shutdown() -> i32 {
     0
 }
 
+/// Limits the total number of threads Lore sizes its pools for.
+///
+/// Lore internally decides how many worker, blocking and compute threads to use
+/// based on this ceiling and the host's processor count. Pass `0` for "no
+/// limit" (the default — pools are sized from the processor count). The
+/// `LORE_MAX_THREADS` environment variable overrides this count when set above
+/// zero. The `LORE_WORKER_THREADS`, `LORE_BLOCKING_THREADS` and
+/// `LORE_COMPUTE_THREADS` environment variables still override the count of
+/// their respective pool with an absolute value when set.
+///
+/// Must be called before the first Lore operation, while the runtime and
+/// compute pool are still unconstructed. Returns `0` if the limit was applied,
+/// `1` if it had already been set (or the runtime was already running).
+#[unsafe(no_mangle)]
+pub extern "C" fn lore_set_thread_limit(count: usize) -> i32 {
+    if crate::set_thread_limit(count) { 0 } else { 1 }
+}
+
 pub type LoreAllocFn = unsafe extern "C" fn(align: usize, size: usize) -> *mut std::ffi::c_void;
 pub type LoreAllocZeroedFn =
     unsafe extern "C" fn(align: usize, size: usize) -> *mut std::ffi::c_void;

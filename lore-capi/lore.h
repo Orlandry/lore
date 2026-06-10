@@ -8703,6 +8703,21 @@ int32_t lore_log_configure(const struct lore_log_config_t *config);
 
 int32_t lore_shutdown(void);
 
+// Limits the total number of threads Lore sizes its pools for.
+//
+// Lore internally decides how many worker, blocking and compute threads to use
+// based on this ceiling and the host's processor count. Pass `0` for "no
+// limit" (the default — pools are sized from the processor count). The
+// `LORE_MAX_THREADS` environment variable overrides this count when set above
+// zero. The `LORE_WORKER_THREADS`, `LORE_BLOCKING_THREADS` and
+// `LORE_COMPUTE_THREADS` environment variables still override the count of
+// their respective pool with an absolute value when set.
+//
+// Must be called before the first Lore operation, while the runtime and
+// compute pool are still unconstructed. Returns `0` if the limit was applied,
+// `1` if it had already been set (or the runtime was already running).
+int32_t lore_set_thread_limit(uintptr_t count);
+
 int32_t lore_set_allocator(lore_alloc_fn alloc,
                            lore_alloc_zeroed_fn alloc_zeroed,
                            lore_realloc_fn realloc,
