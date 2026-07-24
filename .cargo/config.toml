@@ -103,9 +103,12 @@ rustflags = [
     "-C", "force-unwind-tables=yes",
     "-C", "force-frame-pointers=yes",
     "-C", "target-cpu=neoverse-512tvb",
-    # Leave debug symbols in the binary for now, we want these in place for the server binary, but still split them via
-    # package-cli.sh for CLI binaries.
-    "-C", "split-debuginfo=off",
+    # Split debug info into a companion .dwp instead of embedding it. Embedding
+    # (split-debuginfo=off) makes the linker hold every binary's full DWARF in
+    # memory, which OOMs the 16 GB hosted arm64 runner on the full-workspace
+    # `cargo test` build. Packed keeps symbols available (in the .dwp) alongside
+    # the binary while cutting peak linker memory.
+    "-C", "split-debuginfo=packed",
     # allows uuid IntoBytes/FromBytes unstable feature
     "--cfg", "uuid_unstable"
 ]
